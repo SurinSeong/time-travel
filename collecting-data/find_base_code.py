@@ -33,6 +33,7 @@ def get_service_code(mobile_os, mobile_app, api_key):
         "MobileOS": mobile_os,
         "MobileApp": mobile_app,
         "ContentTypeId": "12",    # 관광 타입 설정
+        "cat1": "A02",
         "serviceKey": api_key,
         "_type": "json",
     }
@@ -117,4 +118,5 @@ mobile_os="WEB"
 mobile_app="time-traveler"
 api_key = os.getenv("API_KEY")
 
-print(get_incheon_history_tour_spot(mobile_os, mobile_app, api_key))
+# print(get_incheon_history_tour_spot(mobile_os, mobile_app, api_key))
+print(get_service_code(mobile_os, mobile_app, api_key))
