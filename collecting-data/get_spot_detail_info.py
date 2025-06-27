@@ -33,6 +33,9 @@ BASE_URL = os.getenv("BASE_URL")
 ENDPOINT = os.getenv("KORSERVICE2")
 API_KEY = os.getenv("API_KEY")
 
+mobile_os = "WEB"
+mobile_app = "time-travel"
+
 # 관광지 contentid 받기
 SPOT_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/final_spots.json"
 with open(SPOT_JSON_PATH, "r", encoding="utf-8") as f:
@@ -49,7 +52,7 @@ def get_common_info(content_id, mobile_os="WEB", mobile_app="time-travel"):
         "MobileApp": mobile_app,
         "_type": "json",
         "contentId": content_id,
-        "serviceKey" : API_KEY,
+        "serviceKey" : API_KEY
     }
     try:
         response = requests.get(API_URL, params=params)
@@ -338,18 +341,18 @@ all_image_info = {}
 all_pet_info = {}
 
 # test = get_common_info("1113230")
-test = get_repeat_info("1113230")
+# test = get_repeat_info("1113230")
 # test = get_intro_info("1113230")
 # test = get_image_info("1113230")
 # test = get_pet_info("1113230")
-print(test)
+# print(test)
 
-# for spot in spots:
-#     print(spot)
+for spot in spots:
+    print(spot)
     
-#     # 공통 정보 저장
-#     if spot not in all_common_info:
-#         all_common_info[spot] = get_common_info(spot)
+    # 공통 정보 저장
+    if spot not in all_common_info:
+        all_common_info[spot] = get_common_info(spot)
 
 #     # 반복 정보 저장
 #     if spot not in all_repeat_info:
@@ -368,15 +371,15 @@ print(test)
 #         all_pet_info[spot] = get_pet_info(spot)
 
 
-# COMMON_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/common_info.json"
+COMMON_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/common_info.json"
 # REPEAT_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/repeat_info.json"
 # INTRO_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/intro_info.json"
 # IMAGE_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/image_info.json"
 # PET_JSON_PATH = os.getenv("DATA_FOLDER_PATH") + "/pet_info.json"
 
-# if all_common_info:
-#     with open(COMMON_JSON_PATH, "w", encoding="utf-8") as f:
-#         json.dump(all_common_info, f, ensure_ascii=False, indent=4)
+if all_common_info:
+    with open(COMMON_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(all_common_info, f, ensure_ascii=False, indent=4)
 
 # if all_repeat_info:
 #     with open(REPEAT_JSON_PATH, "w", encoding="utf-8") as f:
