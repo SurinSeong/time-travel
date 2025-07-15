@@ -21,7 +21,7 @@ from find import *
 load_dotenv()
 
 URL = os.getenv("CRAWLING_URL")
-SPOT_CSV_PATH = os.getenv("PREPROCESSED_DATA_PATH") + "/spots_for_crawling.csv"
+SPOT_CSV_PATH = os.getenv("PREPROCESSED_DATA_PATH") + "/remain_for_crawling.csv"
 
 # 원본 파일 불러오기
 df = pd.read_csv(SPOT_CSV_PATH)
@@ -34,9 +34,12 @@ def get_naver_data(info):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("window-size=1920,1080")
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36"
-    )
+    # options.add_argument(
+    #     "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36"
+    # )
+    # options.add_argument(
+    #     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    # )
     
     # 자동화 탐지 우회 옵션 추가
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -55,17 +58,17 @@ def get_naver_data(info):
     else:
         driver.get(URL + f"인천 {info['name']}")
     
-    first_address = info["address"].split()[1]
-    second_address = info["address"].split()[2]
+    first_address = info["addr1"].split()[1]
+    second_address = info["addr1"].split()[2]
 
     # 일단 주어진 기본 정보
-    tel = info["tel"]
-    homepage = info["homepage"]
-    main_image = info["original_image"]
-    overview = info["overview"]
+    tel = info.get("tel", None)
+    homepage = info.get("homepage", None)
+    main_image = info.get("original_image", None)
+    overview = info.get("overview", None)
     good_list = []
 
-    time.sleep(10)
+    time.sleep(7)
 
     # 해당 장소 찾기
     result = find_spot_button(driver, first_address, second_address, info)
@@ -74,7 +77,7 @@ def get_naver_data(info):
         if result == 'next':
             # entryIframe이 없다면?
             if not is_entry_iframe(driver, info):
-                return {"spot_code": info["spot_code"],
+                return {"spot_code": info["tourapi_code"],
                         "tel": tel, 
                         "homepage": homepage, 
                         "original_image": main_image, 
@@ -103,7 +106,7 @@ def get_naver_data(info):
             # 전화번호 정보 얻기
             if not tel:
                 if icon_text == "전화번호":
-                    tel = find_image(icon)
+                    tel = find_tel(icon)
 
             # 홈페이지 주소 선택
             if not homepage:
@@ -163,7 +166,7 @@ def get_naver_data(info):
     # 창 닫기
     driver.quit()
     
-    return {"spot_code": info["spot_code"],
+    return {"spot_code": info["tourapi_code"],
             "tel": tel, 
             "homepage": homepage, 
             "original_image": main_image, 
@@ -189,7 +192,7 @@ for idx, row in df.iterrows():
     info_dict = get_naver_data(row)
     all_naver_data.append(info_dict)
 
-NAVER_JSON_PATH = os.getenv("PREPROCESSED_DATA_PATH") + "/naver_data.json"
+NAVER_JSON_PATH = os.getenv("PREPROCESSED_DATA_PATH") + "/remain_naver_data.json"
 
 if all_naver_data:
     with open(NAVER_JSON_PATH, "w", encoding="utf-8") as f:
