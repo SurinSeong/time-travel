@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
 from langchain_upstage import UpstageEmbeddings
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
@@ -10,11 +11,14 @@ from langchain_upstage import ChatUpstage
 from langchain.tools.retriever import create_retriever_tool
 import streamlit as st
 import time
-os.environ["SERPAPI_API_KEY"] = os.getenv("SERPAPI_API_KEY")
+
+AGENT_DATA_PATH = os.getenv("AGENT_DATA_PATH")
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY")
 
+## RAG 기반
 loader = PyPDFLoader(
-            "Solar LLM.pdf"
+            AGENT_DATA_PATH + "/Solar LLM.pdf"
         )
 
 pages = loader.load_and_split()
@@ -27,14 +31,18 @@ from langchain_upstage import ChatUpstage
 
 chat = ChatUpstage(upstage_api_key=os.getenv("UPSTAGE_API_KEY"))
 
+# Agent가 스스로 액션을 취하도록 하게 검색 tool을 설정함.
+# retriever를 tool로 활용할 수 있도록 함.
 retriever_tool = create_retriever_tool(
     retriever,
-    "solar_search",
-    "Searches any questions related to Solar. Always use this tool when user query is related to Solar!",
+    "solar_search",    # tool의 이름
+    "Searches any questions related to Solar. Always use this tool when user query is related to Solar!",    # tool의 설명 (어느 상황에서 사용해야 할지 정확하게 작성)
 )
 
+## 2번째 tool - tavily 검색 엔진 사용하기
 tavily_tool = TavilySearchResults()
 
+## 3. 여러 검색엔진을 tool로 사용하기
 from langchain_community.utilities import SerpAPIWrapper
 
 params = {
@@ -42,10 +50,11 @@ params = {
     "query": "paris",
     "hl": "ko",
 }
-search = SerpAPIWrapper(params=params)
+search = SerpAPIWrapper(params=params, serpapi_api_key=SERPAPI_API_KEY)
 
 from langchain_core.tools import Tool
 
+# agent가 사용할 수 있는 tool로 변경
 naver_tool = Tool(
     name="naver_search",
     description="Use Naver search engine",
@@ -54,6 +63,7 @@ naver_tool = Tool(
 
 tools = [tavily_tool, retriever_tool, naver_tool]
 
+# Agent 생성
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain import hub
 
