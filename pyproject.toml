@@ -19,6 +19,7 @@ dependencies = [
     "langchain-community>=0.3.21",
     "langchain-core>=0.3.69",
     "langchain-experimental>=0.3.4",
+    "langchain-huggingface>=0.3.0",
     "langchain-upstage>=0.6.0",
     "langgraph>=0.5.4",
     "lxml>=6.0.0",

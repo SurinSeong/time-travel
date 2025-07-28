@@ -14,7 +14,6 @@ from playwright.async_api import async_playwright
 from langchain.agents import tool
 from langchain_core.runnables import RunnableConfig
 from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
-from langchain_community.tools import TavilySearchResults
 from langchain_community.tools.playwright.utils import create_async_playwright_browser
 from langgraph.prebuilt import create_react_agent
 
@@ -214,32 +213,80 @@ def get_restroom_info(query, model):
 
 
 # 3. 나오지 않는 관광지에 대한 웹 검색하기 - tavily
-def get_spots_info_not_in_db(query):
-    search = TavilySearchResults(
+from langchain_community.tools import TavilySearchResults
+
+os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY")
+
+@tool
+def get_spots_info_not_in_db(query, model):
+    """
+    WebSearchForUnknownAttraction
+
+    This tool performs a web search to find information about tourist attractions that do not exist in the current database. When a user queries the vectorstore for a tourist attraction and the result is not found or is insufficient, this tool automatically searches the web to gather relevant details about the location. It is designed to enhance the system's ability to provide up-to-date or previously unknown information on various tourist destinations by supplementing internal data with external search results.
+    """
+    tool = TavilySearchResults(
         max_results=10,
         search_depth="advanced",
+        include_answer=True
     )
-    result = search.invoke(query)
+
+    agent = create_react_agent(model=model, tools=[tool], debug=True)
+    
+    result = []
+    
+    for step in agent.stream(
+        {"messages": query},
+        stream_mode="values",
+    ):
+        result.append(step["messages"][-1])
+
     return result
 
 # 4. 벡터 DB에 접근하기
 from langchain.tools.retriever import create_retriever_tool
+from langchain_chroma import Chroma
+from langchain_huggingface.embeddings import HuggingFaceEndpointEmbeddings
+
+os.environ["HUGGINGFACE_API_KEY"] = os.getenv("HUGGINGFACE_API_KEY")
+
+embedding_model_name = "intfloat/multilingual-e5-large-instruct"
+
+hf_embeddings = HuggingFaceEndpointEmbeddings(
+    model=embedding_model_name,
+    task="feature-extraction"
+)
+
+VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH")
+VECTOR_DB_NAME = "total_spots_store"
+
+# 저장된 벡터 DB 불러오기
+spots_store = Chroma(
+                    collection_name=VECTOR_DB_NAME,
+                    embedding_function=hf_embeddings,
+                    persist_directory=VECTOR_DB_PATH + "/with_hf_embeddings"
+                )
 
 def get_vectorstore_info(query, llm):
+    spot_retriever = spots_store.as_retriever()
+
     retriever_tool = create_retriever_tool(
+        retriever=spot_retriever,
         name="vectorstore_search",
         description="Use this tool to search for information in the ChromaDB."
     )
     tools = load_tools([retriever_tool], llm)
     agent_chain = initialize_agent(
-        tools=tools, llm=llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True
+        tools=tools,
+        llm=llm,
+        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True
     )
     result = agent_chain.ainvoke(query)
     return result
 
 
 # 5. 대화 내용 기억하는 agent
-# 5. 뭔가 일정 관리 같은거를 해주면 좋을텐데
+
 
 # 날씨 - OpenWeatherMap
 from langchain_community.utilities import OpenWeatherMapAPIWrapper
@@ -252,10 +299,15 @@ weather = OpenWeatherMapAPIWrapper()
 def get_weather_info(llm, query):
     tools = load_tools(["openweathermap-api"], llm)
     agent_chain = initialize_agent(
-        tools=tools, llm=llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True
+        tools=tools,
+        llm=llm,
+        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True
     )
     result = agent_chain.ainvoke(query)
     return result
+
+# 5. 뭔가 일정 관리 같은거를 해주면 좋을텐데
 
 
 # 콜백 함수 정의
@@ -265,7 +317,7 @@ from langchain_core.callbacks.streaming_stdout import StreamingStdOutCallbackHan
 print_callback = CallbackManager([StreamingStdOutCallbackHandler()])
 
 
-# 모델 정의
+# 모델 정의 ==> 추후 로컬 모델로 변경 예정
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
