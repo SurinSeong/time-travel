@@ -29,3 +29,12 @@ urllib3==2.4.0
 webdriver-manager==4.0.2
 websocket-client==1.8.0
 wsproto==1.2.0
+langchain
+langchain-openai
+langchain-community
+langchain-chroma
+langchain-huggingface
+langchain-tavily
+langgraph
+chromadb
+faiss-cpu
