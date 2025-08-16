@@ -6,6 +6,7 @@
 import os
 from dotenv import load_dotenv
 from graph_module import make_graph
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 def main():
     # 환경 변수 로드
@@ -43,8 +44,15 @@ def main():
             # 응답 출력
             if result and "messages" in result:
                 for message in result["messages"]:
-                    if hasattr(message, 'content') and message.content:
+                    if isinstance(message, AIMessage):
+                        # 최종 챗봇 응답
                         print(f"\n챗봇: {message.content}")
+                    elif isinstance(message, ToolMessage):
+                        # tool 실행 로그
+                        print(f"[tool 실행: {message.tool_call_id}, {message.name}] {message.content}")
+                    elif isinstance(message, HumanMessage):
+                        # 사람 발화 로그
+                        print(f"[User]: {message.content}")
             
         except KeyboardInterrupt:
             print("\n\n그럼 이만! 또 놀러와~")

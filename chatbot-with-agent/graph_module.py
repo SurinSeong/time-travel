@@ -30,19 +30,12 @@ llm = ChatOpenAI(
 class State(TypedDict):
     # 메시지 정의하기
     messages: Annotated[list, add_messages]
-    ask_human: bool
     question_analysis: dict  # 질문 분석 결과
     current_step: str  # 현재 처리 단계
 
-# human 요청 시 사용되는 스키마
-class HumanRequest(BaseModel):
-    """Forward the conversation to an expert. Use when you can't assist directly or the user needs assistance that exceeds your authority.
-    To use this function, pass the user's 'request' so that an expert can provide appropriate guidance."""
-    request: str
 
 # 도구 목록
-TOOLS = [
-    analyze_user_question,
+TOOLS_RAW = [
     search_spot_tool_in_db,
     search_tool_in_web,
     open_weather_map,
@@ -54,8 +47,12 @@ TOOLS = [
     ask_for_clarification,
     parse_gps_coordinates,
     search_restaurants_by_location,
-    search_cafes_by_location
+    search_cafes_by_location,
+    resolve_place,
+    build_kakaomap_route,
 ]
+
+TOOLS = [t for t in TOOLS_RAW if t is not None]
 
 # llm에 TOOLS 바인딩
 llm_with_tools = llm.bind_tools(TOOLS)
@@ -67,7 +64,7 @@ def analyze_question_node(state: State):
     
     if isinstance(last_message, HumanMessage):
         # 질문 분석 실행
-        analysis_result = analyze_user_question(last_message.content)
+        analysis_result = analyze_user_question.invoke(last_message.content)
         
         return {
             "question_analysis": analysis_result,
@@ -79,6 +76,16 @@ def analyze_question_node(state: State):
         "current_step": "no_analysis_needed"
     }
 
+def _has_unresolved_tool_calls(messages: list) -> bool:
+    """마지막 ToolMessage가 나오기 전에 tool_calls가 있으면 True"""
+    # 뒤에서 앞으로 훑으며 ToolMessage를 만나면 해결된 상태로 간주
+    for m in reversed(messages):
+        if isinstance(m, ToolMessage):
+            return False
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            return True
+    return False
+
 # 챗봇 함수 정의 - 인천 토박이 친구 페르소나 적용
 def chatbot(state: State):
     # 시스템 메시지에 페르소나 설정
@@ -89,62 +96,75 @@ def chatbot(state: State):
     2. 벡터DB에서 답이 안 나오면 웹 검색을 해
     3. 맛집/카페 질문이면 카카오 API로 검색해
     4. 블로그 후기가 필요하면 카카오 블로그 검색 후 크롤링해
-    5. 질문이 명확하지 않으면 구체적으로 물어봐
+    5. 화장실에 대한 질문(restroom=True)이면 restroom_tool을 사용해서 CSV에서 위치 정보를 찾아 제공해
+    6. 길찾기(route=True)면 resolve_place와 build_kakaomap_route를 순서대로 호출해서 웹 링크를 제공해
+    7. 질문이 명확하지 않으면 구체적으로 물어봐
     
+    길찾기(route=True)는 최대 2번만 tool을 호출(먼저 resolve_place, 다음 build_kakaomap_route)하고 결과를 안내한 뒤 끝내.
+    화장실(restroom=True)은 1번만 tool 호출하고 결과 안내 후 끝내. 추가 tool_call 금지.
+
     항상 친근하고 반말로 대화해줘!"""
+
+    if _has_unresolved_tool_calls(state["messages"]):
+        return {}    # 상태 변경 없이 다음 노드로
     
     # 시스템 메시지 추가
     messages_with_system = [{"role": "system", "content": system_message}] + state["messages"]
     
     response = llm_with_tools.invoke(messages_with_system)
 
-    # 사람에게 질문할지 여부 초기화
-    ask_human = False
-
-    # 도구 호출이 있고, 이름이 'HumanRequest' 인 경우
-    if response.tool_calls and response.tool_calls[0]["name"] == HumanRequest.__name__:
-        ask_human = True
-
     # 메시지 호출 및 반환
-    return {"messages": [response], "ask_human": ask_human}
+    return {"messages": [response]}
 
-# 사람의 개입이 필요할 경우의 노드
-# 응답 메시지 생성 함수
-def create_response(response: str, ai_message: AIMessage):
-    return ToolMessage(
-        content=response,
-        tool_call_id=ai_message.tool_calls[0]["id"],
-    )
 
-# 인간 노드 처리하기
-def human_node(state: State):
-    new_messages = []
+def _called_tool(state: State, name: str) -> bool:
+    for m in reversed(state["messages"]):
+        if isinstance(m, ToolMessage):
+            # 버전에 따라 name/tool_name 속성 다를 수 있기 때문에 둘다 확인
+            if getattr(m, "name", None) == name or getattr(m, "tool_name", None) == name:
+                return True
+    return False
 
-    if not isinstance(state["messages"][-1], ToolMessage):
-        # 사람으로부터 응답이 없는 경우
-        new_messages.append(
-            create_response("No response from human.", state["messages"][-1])
-        )
 
-    return {
-        # 새로운 메시지 추가
-        "messages": new_messages,
-        # 플래그 해제
-        "ask_human": False
-    }
+def _dump_tool_names(messages, last_n: int = 10):
+    names = []
+    for message in messages:
+        if isinstance(message, ToolMessage):
+            names.append(getattr(message, "name", None) or getattr(message, "tool_name", None))
+    print(f"[DEBUG] ToolMessage names: {names[-last_n:]}")
+
 
 # 조건부 논리 정의 함수
 def select_next_node(state: State):
-    # 인간에게 질문 여부 확인
-    if state["ask_human"]:
-        return "human"
+
+    # 최근 어떤 ToolMessage가 붙었는지
+    _dump_tool_names(state.get("messages", []))
     
-    # 질문 분석이 필요한 경우
+    # 질문 분석이 되지 않았다면
     if "question_analysis" not in state or not state["question_analysis"]:
         return "analyze"
+
+    qa_types = state["question_analysis"].get("question_types", {})
+
+    # 길찾기 인텐트(route=True)면 바로 tools 실행
+    if qa_types.get("route"):
+        if _called_tool(state, "build_kakaomap_route"):
+            return END
+        return "tools"
     
-    # 이전과 동일한 경로
+    # 화장실 우선 처리
+    if qa_types.get("restroom"):
+        if _called_tool(state, "restroom_search"):
+            return END
+        return "tools"
+
+    # 나머지 일반 도구 선택하기
     return tools_condition(state)
+
+
+def _after_tools_router(state):
+    return "tools" if _has_unresolved_tool_calls(state.get("messages", [])) else "chatbot"
+
 
 # 그래프 생성 함수
 def make_graph():
@@ -158,7 +178,6 @@ def make_graph():
     graph_builder.add_node("analyze", analyze_question_node)  # 질문 분석 노드
     graph_builder.add_node("chatbot", chatbot)
     graph_builder.add_node("tools", tool_node)
-    graph_builder.add_node("human", human_node)
 
     # 조건부 엣지 추가
     graph_builder.add_conditional_edges(
@@ -170,13 +189,17 @@ def make_graph():
     graph_builder.add_conditional_edges(
         "chatbot",
         select_next_node,
-        {"human": "human", "tools": "tools", "analyze": "analyze", END: END}
+        {"tools": "tools", "analyze": "analyze", END: END}
     )
 
     # 엣지 추가하기
     graph_builder.add_edge(START, "analyze")  # 시작 시 질문 분석부터
-    graph_builder.add_edge("tools", "chatbot")
-    graph_builder.add_edge("human", "chatbot")
+    # graph_builder.add_edge("tools", _after_tools_router)
+    graph_builder.add_conditional_edges(
+        "tools",
+        _after_tools_router,
+        {"tools": "tools", "chatbot": "chatbot"}
+    )
 
     # 대화 내용 기억 tool
     memory = MemorySaver()
@@ -185,7 +208,6 @@ def make_graph():
     graph = \
     graph_builder.compile(
         checkpointer=memory,
-        interrupt_before=["human"]
     )
 
     return graph

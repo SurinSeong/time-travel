@@ -1,7 +1,6 @@
 # 필요한 라이브러리 로드
 import os
 import requests
-import json
 from bs4 import BeautifulSoup
 import re
 from dotenv import load_dotenv
@@ -25,6 +24,7 @@ os.environ["HF_TOKEN"] = os.getenv("HUGGINGFACE_API_KEY")
 os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY")
 os.environ["OPENWEATHERMAP_API_KEY"] = os.getenv("OPENWEATHERMAP_API_KEY")
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+os.environ["USER_AGENT"] = os.getenv("USER_AGENT")
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
 
 # URL, DATA PATH 설정
@@ -79,6 +79,7 @@ def analyze_user_question(user_question: str) -> dict:
         "weather": False,      # 날씨 관련
         "restroom": False,     # 화장실 관련
         "blog_review": False,  # 블로그 후기 관련
+        "route": False,        # 길찾기 관련
         "clarification_needed": False  # 질문 명확화 필요
     }
     
@@ -148,7 +149,7 @@ def analyze_user_question(user_question: str) -> dict:
             extracted_info["location"] = location_match.group(1)
     
     # 화장실 관련 질문 확인
-    if any(keyword in question_lower for keyword in ["화장실", "화장실", "화장실"]):
+    if "화장실" in question_lower:
         question_types["restroom"] = True
         extracted_info["query"] = user_question
     
@@ -168,11 +169,18 @@ def analyze_user_question(user_question: str) -> dict:
                 extracted_info["place_name"] = match.group(1).strip()
                 break
     
+    # 길찾기/경로 안내 관련 질문 확인
+    if any(keyword in question_lower for keyword in ["길찾기", "가는 법", "가는 길", "가는길", "어떻게 가", "경로", "루트"]):
+        question_types["route"] = True
+        extracted_info["query"] = user_question
+
     # 질문이 명확하지 않은 경우 확인
     if not any(question_types.values()):
         question_types["clarification_needed"] = True
         extracted_info["needs_clarification"] = True
-        extracted_info["clarification_question"] = "어떤 정보를 찾고 계신지 좀 더 구체적으로 말씀해주세요! 관광지, 맛집, 카페, 날씨 등 어떤 것이 궁금하신가요?"
+        extracted_info["clarification_question"] = (
+            "어떤 정보를 찾고 계신지 좀 더 구체적으로 말씀해주세요! 관광지, 맛집, 카페, 날씨 등 어떤 것이 궁금하신가요?"
+        )
     
     return {
         "question_types": question_types,
@@ -269,12 +277,12 @@ def get_near_cafe_in_kakao(query: str, location: str = None, latitude: str = Non
             address = spot_info["road_address_name"]
             phone = spot_info["phone"]
             latitude = spot_info["y"]
-            longtitude = spot_info["x"]
+            longitude = spot_info["x"]
             info = {
                 "name": name,
                 "address": address,
                 "latitude": latitude,
-                "longtitude": longtitude,
+                "longitude": longitude,
                 "place_url": spot_url,
                 "phone_number": phone
             }
@@ -333,12 +341,12 @@ def get_near_restaurant_in_kakao(query: str, location: str = None, latitude: str
             address = spot_info["road_address_name"]
             phone = spot_info["phone"]
             latitude = spot_info["y"]
-            longtitude = spot_info["x"]
+            longitude = spot_info["x"]
             info = {
                 "name": name,
                 "address": address,
                 "latitude": latitude,
-                "longtitude": longtitude,
+                "longitude": longitude,
                 "place_url": spot_url,
                 "phone_number": phone
             }
@@ -626,3 +634,46 @@ def search_cafes_by_location(user_input: str) -> dict:
         result["message"] = "위치 정보가 필요합니다. '근처', '주변' 또는 GPS 좌표를 포함해서 질문해주세요."
     
     return result
+
+
+# 13. Kakao 맵 장소 검색 tool
+@tool
+def resolve_place(query: str) -> dict:
+    """장소명을 kakao local API로 검색해 좌표를 반환한다."""
+    url = KAKAO_URL + "/local/search/keyword.json"
+    headers = {
+        "Authorization": f"KakaoAK {KAKAO_REST_API_KEY}"
+    }
+    params = {
+        "query": query,
+        "size": "3"
+    }
+
+    try:
+        response = requests.get(url=url, headers=headers, params=params)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        return {"error": f"Kakao API 요청 실패: {e}"}
+
+    docs = response.json().get("documents", [])
+    if not docs:
+        return {"error": "검색 결과 없음"}
+
+    first = docs[0]
+    return {
+        "name": first["place_name"],
+        "lat": first["y"],
+        "lon": first["x"],
+        "address": first["road_address_name"] or first["address_name"],
+        "candidates": [
+            {"name": doc["place_name"], "lat": doc["y"], "lon": doc["x"]}
+            for doc in docs
+        ]
+    }
+
+# 14. Kakao 맵 길찾기 링크 생성 tool
+@tool
+def build_kakaomap_route(start_lat: str, start_lon: str, end_lat: str, end_lon: str, by: str = "car") -> dict:
+    """출발지, 도착지, 이동수단으로 카카오맵 길찾기 앱/웹 링크를 생성합니다."""
+    web_url = f"https://m.map.kakao.com/scheme/route?sp={start_lat},{start_lon}&ep={end_lat},{end_lon}&by={by}"
+    return {"url": web_url}
