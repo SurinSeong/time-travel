@@ -6,10 +6,7 @@ load_dotenv()
 
 from langchain_openai import ChatOpenAI
 from langchain_upstage import ChatUpstage
-from langchain_community.llms import HuggingFacePipeline
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-import torch
 
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -17,70 +14,26 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
-from tool_module import *
+from .tool_module import *
 
 # 환경 변수 설정
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 os.environ["UPSTAGE_API_KEY"] = os.getenv("UPSTAGE_API_KEY")
-os.environ["HF_TOKEN"] = os.getenv("HUGGINGFACE_API_KEY")
 
-# A.X 4.0 모델 로드
-def load_ax_model():
-    """SKT A.X 4.0 모델을 로드합니다."""
-    model_name = "skt/A.X-4.0"
+# LLM 정의 - 인천 토박이 친구 페르소나 설정
+def get_llm(company_name):
+    if company_name == "openai":
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.3,
+        )
     
-    # 토크나이저 로드
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
-    # 모델 로드 (GPU 메모리에 따라 조정)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto" if torch.cuda.is_available() else "cpu",
-        trust_remote_code=True
-    )
-    model.eval()
-    
-    # 파이프라인 생성
-    pipe = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        max_new_tokens=512,
-        do_sample=True,
-        temperature=0.3,
-        top_p=0.9,
-        repetition_penalty=1.1
-    )
-    
-    return pipe
-
-# A.X 4.0 모델을 LangChain 파이프라인으로 변환
-try:
-    ax_pipeline = load_ax_model()
-    llm = HuggingFacePipeline(
-        pipeline=ax_pipeline,
-        model_kwargs={"temperature": 0.3}
-    )
-    print("A.X 4.0 모델 로드 완료!")
-    company_name = "skt"
-    
-except Exception as e:
-    print(f"A.X 4.0 모델 로드 실패: {e}")
-    # print("Upstage 모델로 대체합니다.")
-    # from langchain_upstage import ChatUpstage
-    # llm = ChatUpstage(
-    #     model="solar-mini",
-    #     temperature=0.3,
-    # )
-    # company_name = "upstage"
-    # print("Openai 모델로 대체합니다.")
-    # from langchain_openai import ChatOpenAI
-    # llm = ChatOpenAI(
-    #     model="gpt-4o-mini",
-    #     temperature=0.3,
-    # )
-    # company_name = "openai"
+    elif company_name == "upstage":
+        llm = ChatUpstage(
+            model="solar-pro",
+            temperature=0.3,
+        )
+    return llm
 
 # 상태 정의
 class State(TypedDict):
@@ -110,8 +63,11 @@ TOOLS_RAW = [
 
 TOOLS = [t for t in TOOLS_RAW if t is not None]
 
+# 원하는 llm 선택
+selected_llm = get_llm("openai")
+
 # llm에 TOOLS 바인딩
-llm_with_tools = llm.bind_tools(TOOLS)
+llm_with_tools = selected_llm.bind_tools(TOOLS)
 
 # 질문 분석 노드
 def analyze_question_node(state: State):
@@ -158,51 +114,26 @@ def _has_unresolved_tool_calls(messages: list) -> bool:
 # 챗봇 함수 정의 - 인천 토박이 친구 페르소나 적용
 def chatbot(state: State):
     # 시스템 메시지에 페르소나 설정
-    if company_name == "openai":
-        system_message = """너는 인천 토박이인 친한 친구야! 반말과 친근감 있는 말투로 대화해줘.
-        
-        사용자의 질문을 분석해서 적절한 도구를 사용해서 답변해줘:
-        1. 인천 관광지 관련 질문이면 벡터DB를 먼저 검색해
-        2. 벡터DB에서 답이 안 나오면 웹 검색을 해
-        3. 맛집/카페 질문이면 카카오 API로 검색해
-        4. 블로그 후기가 필요하면 카카오 블로그 검색 후 크롤링해
-        5. 화장실에 대한 질문(restroom=True)이면 restroom_tool을 사용해서 CSV에서 위치 정보를 찾아 제공해
-        6. 길찾기(route=True)면 resolve_place와 build_kakaomap_route를 순서대로 호출해서 웹 링크를 제공해
-        - 이동수단은 사용자 질문에서 추출한 transport_mode를 사용해 (car, foot, bicycle, publictransit)
-        7. 위치 기반 검색(맛집/카페)에서 "근처", "주변"만 있으면 현재 위치 정보를 요청하고, 구체적 위치명이 있으면 해당 위치 기반으로 검색
-        8. 질문이 명확하지 않거나 도구를 사용할 수 없다면 구체적으로 물어봐
-        
-        길찾기(route=True)는 최대 2번만 tool을 호출(먼저 resolve_place, 다음 build_kakaomap_route)하고 결과를 안내한 뒤 끝내.
-        화장실(restroom=True)은 1번만 tool 호출하고 결과 안내 후 끝내. 추가 tool_call 금지.
+    system_message = """너는 인천 토박이인 친한 친구야! 반말과 친근감 있는 말투로 대화해줘.
+    
+    사용자의 질문을 분석해서 적절한 도구를 사용해서 답변해줘:
+    1. 인천 관광지 관련 질문이면 벡터DB를 먼저 검색해
+    2. 벡터DB에서 답이 안 나오면 웹 검색을 해
+    3. 맛집/카페 질문이면 카카오 API로 검색해
+    4. 블로그 후기가 필요하면 카카오 블로그 검색 후 크롤링해
+    5. 화장실에 대한 질문(restroom=True)이면 restroom_tool을 사용해서 CSV에서 위치 정보를 찾아 제공해
+    6. 길찾기(route=True)면 resolve_place와 build_kakaomap_route를 순서대로 호출해서 웹 링크를 제공해
+       - 이동수단은 사용자 질문에서 추출한 transport_mode를 사용해 (car, foot, bicycle, publictransit)
+    7. 위치 기반 검색(맛집/카페)에서 "근처", "주변"만 있으면 현재 위치 정보를 요청하고, 구체적 위치명이 있으면 해당 위치 기반으로 검색
+    8. 질문이 명확하지 않으면 구체적으로 물어봐
+    
+    길찾기(route=True)는 최대 2번만 tool을 호출(먼저 resolve_place, 다음 build_kakaomap_route)하고 결과를 안내한 뒤 끝내.
+    화장실(restroom=True)은 1번만 tool 호출하고 결과 안내 후 끝내. 추가 tool_call 금지.
 
-        맛집/카페 질문이면 반드시 적절한 도구를 호출해서 구체적인 정보를 제공해줘!
-        "잠깐만 기다려줘" 같은 모호한 답변은 하지 말고, 바로 도구를 사용해서 답변해줘!
+    맛집/카페 질문이면 반드시 적절한 도구를 호출해서 구체적인 정보를 제공해줘!
+    "잠깐만 기다려줘" 같은 모호한 답변은 하지 말고, 바로 도구를 사용해서 답변해줘!
 
-        항상 친근하고 반말로 대화해줘!"""
-    elif company_name == "upstage":
-        system_message = """
-        너는 인천 토박이인 친한 친구야. 항상 반말로, 간결하고 정확하게 대화해. 답변은 먼저 1문장 결론 → 이어서 최대 3개 불릿으로 핵심만 정리해.
-
-        도구 사용 규칙:
-        - 인천 관광지 질문: 벡터DB(search_spot_tool_in_db) 먼저 → 없으면 웹 검색(search_tool_in_web)
-        - 맛집/카페: 카카오 API(get_near_restaurant_in_kakao / get_near_cafe_in_kakao)
-        - 블로그 후기: 카카오 블로그 검색(search_blog) 후 크롤링(get_detail_info)
-        - 화장실(restroom=True): restroom_tool 1회만 호출 후 결과 안내, 추가 tool_call 금지
-        - 길찾기(route=True): resolve_place → build_kakaomap_route 순서로 최대 2회 호출 후 링크 제공
-        - 위치기반 검색에서 "근처/주변"만 있으면 현재 위치(user_lat, user_lon) 요청, 위치명이 있으면 그 기준으로 검색
-        - transport_mode(car, foot, bicycle, publictransit)은 사용자 질문에서 추출하거나 없으면 확인 질문으로 받아
-
-        대화 스타일:
-        - “잠깐만 기다려줘” 같은 채우기 멘트 금지. 필요한 정보는 바로 한 번에 물어봐.
-        - 모르면 “모름”이라고 말해. 추측 금지.
-        - 링크는 명확히 표기하고, 결과는 요점 위주로 정리해.
-        - 불필요한 장황함 금지. 예시·변명·사고과정 노출 금지.
-
-        출력 형식:
-        - 1문장 결론
-        - 불릿 최대 3개(필요 시 링크/리스트 포함)
-        - 한국어만 사용
-        """
+    항상 친근하고 반말로 대화해줘!"""
 
     if _has_unresolved_tool_calls(state["messages"]):
         return {}    # 상태 변경 없이 다음 노드로
@@ -211,8 +142,8 @@ def chatbot(state: State):
     messages_with_system = [{"role": "system", "content": system_message}] + state["messages"]
     
     response = llm_with_tools.invoke(messages_with_system)
-    
-    # 디버깅을 위한 로그 추가
+
+    # 디버깅
     print(f"[DEBUG] LLM 응답: {response}")
     if hasattr(response, 'tool_calls') and response.tool_calls:
         print(f"[DEBUG] 도구 호출 감지: {response.tool_calls}")
@@ -249,8 +180,8 @@ def select_next_node(state: State):
         return "analyze"
 
     qa_types = state["question_analysis"].get("question_types", {})
-    
-    # 디버깅을 위한 로그 추가
+
+    # 디버깅
     print(f"[DEBUG] select_next_node - qa_types: {qa_types}")
 
     # 길찾기 인텐트(route=True)면 바로 tools 실행
@@ -318,18 +249,3 @@ def make_graph():
     )
 
     return graph
-
-
-# if __name__ == "__main__":
-#     graph = make_graph()
-
-#     from IPython.display import Image, display
-#     from langchain_core.runnables.graph import MermaidDrawMethod
-
-#     display(
-#         Image(
-#             graph.get_graph().draw_mermaid_png(
-#                 draw_method=MermaidDrawMethod.API,
-#             )
-#         )
-#     )
